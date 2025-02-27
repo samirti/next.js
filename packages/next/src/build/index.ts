@@ -80,7 +80,7 @@ import {
   UNDERSCORE_NOT_FOUND_ROUTE_ENTRY,
   UNDERSCORE_NOT_FOUND_ROUTE,
   DYNAMIC_CSS_MANIFEST,
-  RESPONSE_CONFIG_MANIFEST,
+  TURBOPACK_CLIENT_MIDDLEWARE_MANIFEST,
 } from '../shared/lib/constants'
 import {
   getSortedRoutes,
@@ -645,7 +645,7 @@ async function writeStandaloneDirectory(
         const middlewareOutput = path.join(
           distDir,
           STANDALONE_DIRECTORY,
-          requiredServerFiles.config.distDir,
+          path.relative(outputFileTracingRoot, distDir),
           SERVER_DIRECTORY,
           'middleware.js'
         )
@@ -1341,24 +1341,6 @@ export default async function build(
         NextBuildContext.clientRouterFilters = clientRouterFilters
       }
 
-      if (config.experimental.streamingMetadata) {
-        // Write html limited bots config to response-config-manifest
-        const responseConfigManifestPath = path.join(
-          distDir,
-          RESPONSE_CONFIG_MANIFEST
-        )
-        const responseConfigManifest: {
-          version: number
-          htmlLimitedBots: string
-        } = {
-          version: 0,
-          htmlLimitedBots:
-            config.experimental.htmlLimitedBots ||
-            HTML_LIMITED_BOT_UA_RE_STRING,
-        }
-        await writeManifest(responseConfigManifestPath, responseConfigManifest)
-      }
-
       // Ensure commonjs handling is used for files in the distDir (generally .next)
       // Files outside of the distDir can be "type": "module"
       await writeFileUtf8(
@@ -1428,7 +1410,10 @@ export default async function build(
             duration: compilerDuration,
             shutdownPromise: p,
             ...rest
-          } = await turbopackBuild(true)
+          } = await turbopackBuild(
+            process.env.NEXT_TURBOPACK_USE_WORKER === undefined ||
+              process.env.NEXT_TURBOPACK_USE_WORKER !== '0'
+          )
           shutdownPromise = p
           traceMemoryUsage('Finished build', nextBuildSpan)
 
@@ -2266,9 +2251,6 @@ export default async function build(
               path.join(SERVER_DIRECTORY, FUNCTIONS_CONFIG_MANIFEST),
               path.join(SERVER_DIRECTORY, MIDDLEWARE_MANIFEST),
               path.join(SERVER_DIRECTORY, MIDDLEWARE_BUILD_MANIFEST + '.js'),
-              ...(config.experimental.streamingMetadata
-                ? [RESPONSE_CONFIG_MANIFEST]
-                : []),
               ...(!process.env.TURBOPACK
                 ? [
                     path.join(
@@ -2366,6 +2348,18 @@ export default async function build(
                 originalSource: '/:path*',
               },
             ],
+          }
+
+          if (turboNextBuild) {
+            await writeManifest(
+              path.join(
+                distDir,
+                'static',
+                buildId,
+                TURBOPACK_CLIENT_MIDDLEWARE_MANIFEST
+              ),
+              functionsConfigManifest.functions['/_middleware'].matchers || []
+            )
           }
         }
       }
@@ -2775,6 +2769,10 @@ export default async function build(
                 ? true
                 : undefined
 
+            const htmlBotsRegexString =
+              // The htmlLimitedBots has been converted to a string during loadConfig
+              config.htmlLimitedBots || HTML_LIMITED_BOT_UA_RE_STRING
+
             // this flag is used to selectively bypass the static cache and invoke the lambda directly
             // to enable server actions on static routes
             const bypassFor: RouteHas[] = [
@@ -2784,6 +2782,20 @@ export default async function build(
                 key: 'content-type',
                 value: 'multipart/form-data;.*',
               },
+              // If it's PPR rendered non-static page, bypass the PPR cache when streaming metadata is enabled.
+              // This will skip the postpone data for those bots requests and instead produce a dynamic render.
+              ...(isRoutePPREnabled &&
+              // Disable streaming metadata for PPR on deployment where we don't have the special env.
+              // TODO: enable streaming metadata in PPR mode by default once it's ready.
+              process.env.__NEXT_EXPERIMENTAL_PPR === 'true'
+                ? [
+                    {
+                      type: 'header',
+                      key: 'user-agent',
+                      value: htmlBotsRegexString,
+                    },
+                  ]
+                : []),
             ]
 
             // We should collect all the dynamic routes into a single array for
