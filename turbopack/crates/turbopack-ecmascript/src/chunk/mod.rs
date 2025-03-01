@@ -173,11 +173,6 @@ impl EcmascriptChunk {
     pub fn chunk_content(&self) -> Vc<EcmascriptChunkContent> {
         *self.content
     }
-
-    #[turbo_tasks::function]
-    pub async fn chunk_items_count(&self) -> Result<Vc<usize>> {
-        Ok(Vc::cell(self.content.await?.chunk_items.len()))
-    }
 }
 
 #[turbo_tasks::function]
@@ -216,8 +211,8 @@ impl Introspectable for EcmascriptChunk {
     #[turbo_tasks::function]
     async fn children(self: Vc<Self>) -> Result<Vc<IntrospectableChildren>> {
         let mut children = children_from_output_assets(self.references())
-            .await?
-            .clone_value();
+            .owned()
+            .await?;
         let chunk_item_module_key = chunk_item_module_key().to_resolved().await?;
         for chunk_item in self.await?.content.included_chunk_items().await? {
             children.insert((
